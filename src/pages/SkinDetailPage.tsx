@@ -4,7 +4,7 @@ import { fetchSkinById } from "../api/skins";
 import { fetchPrice, type PriceData } from "../api/prices";
 import { wearFromFloat, WEAR_RANGES } from "../types";
 import type { Skin } from "../types";
-import SkinViewer3D from "../components/SkinViewer3D";
+import SkinInspector2D from "../components/SkinInspector2D";
 
 export default function SkinDetailPage() {
   const { id } = useParams();
@@ -15,7 +15,6 @@ export default function SkinDetailPage() {
   const [floatVal, setFloatVal] = useState(0.15);
   const [pattern, setPattern] = useState(420);
   const [stattrak, setStattrak] = useState(false);
-  const [autoRotate, setAutoRotate] = useState(true);
 
   const [prices, setPrices] = useState<PriceData[]>([]);
   const [pricesLoading, setPricesLoading] = useState(false);
@@ -90,26 +89,16 @@ export default function SkinDetailPage() {
       </Link>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* 3D Viewer */}
+        {/* 2D Inspector */}
         <div className="space-y-3">
-          <SkinViewer3D
+          <SkinInspector2D
             imageUrl={skin.image}
             float={floatVal}
             pattern={pattern}
-            rotateAuto={autoRotate}
           />
-          <div className="flex items-center justify-between text-xs text-zinc-500">
-            <span>Arraste para girar · Scroll para zoom</span>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoRotate}
-                onChange={(e) => setAutoRotate(e.target.checked)}
-                className="accent-amber-500"
-              />
-              Auto-rotação
-            </label>
-          </div>
+          <p className="text-xs text-zinc-500">
+            Ajuste o float e o pattern abaixo para ver a skin mudar.
+          </p>
         </div>
 
         {/* Info & Controls */}

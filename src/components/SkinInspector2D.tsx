@@ -7,22 +7,62 @@ interface Props {
   imageUrl: string;
   float: number; // 0..1 (visual wear)
   pattern: number; // 0..1000 (seed)
+  /**
+   * URL de uma imagem renderizada server-side pela Steam (vinda da CSFloat
+   * via inspect link). Quando fornecida, mostramos a imagem REAL do item
+   * naquele float/pattern e desabilitamos a simulação por shader.
+   */
+  realImageUrl?: string | null;
 }
 
 /**
  * SkinInspector2D
  * --------------------------------------------------------------------------
- * Inspetor 2D estilo csgoskins.gg: a skin é renderizada de frente (plano),
- * sem rotação. Um shader aplica:
- *   - Wear (float 0..1): escurece áreas com base em ruído procedural,
- *     simulando arranhões/desgaste. Fica mais intenso conforme o float sobe.
- *   - Pattern (seed 0..1000): muda offset/rotação/escala da textura,
- *     simulando a variação de pattern index do CS2.
+ * Modo 1 — Imagem REAL (quando `realImageUrl` é fornecida):
+ *   Mostra a imagem renderizada server-side pela Steam (mesma fonte usada
+ *   por csgoskins.gg, csfloat, etc). Reflete float/pattern reais do item.
  *
- * Não é uma reprodução 1:1 do shader proprietário do CS2; é uma aproximação
- * visual com a mesma intenção (educacional).
+ * Modo 2 — Simulação (sem `realImageUrl`):
+ *   Renderiza a imagem genérica do market com um shader procedural que
+ *   aproxima wear (arranhões/edge wear) e pattern (rotação/offset). Útil
+ *   para "brincar" com os sliders sem precisar de inspect link.
  */
-export default function SkinInspector2D({ imageUrl, float, pattern }: Props) {
+export default function SkinInspector2D({
+  imageUrl,
+  float,
+  pattern,
+  realImageUrl,
+}: Props) {
+  // ============= MODO REAL =============
+  if (realImageUrl) {
+    return (
+      <div className="w-full aspect-[4/3] bg-gradient-to-br from-zinc-900 to-zinc-950 rounded-lg border border-amber-500/30 overflow-hidden relative">
+        <img
+          src={realImageUrl}
+          alt="Skin renderizada pela Steam"
+          className="w-full h-full object-contain"
+          loading="eager"
+        />
+        <div className="absolute top-2 left-2 bg-amber-500/90 text-zinc-950 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">
+          Imagem real · Steam
+        </div>
+      </div>
+    );
+  }
+
+  // ============= MODO SIMULAÇÃO (shader) =============
+  return <SkinSimulationCanvas imageUrl={imageUrl} float={float} pattern={pattern} />;
+}
+
+function SkinSimulationCanvas({
+  imageUrl,
+  float,
+  pattern,
+}: {
+  imageUrl: string;
+  float: number;
+  pattern: number;
+}) {
   const texture = useSteamTexture(imageUrl);
   const aspect = useMemo(() => {
     if (!texture?.image) return 4 / 3;
@@ -38,6 +78,9 @@ export default function SkinInspector2D({ imageUrl, float, pattern }: Props) {
           Carregando textura...
         </div>
       )}
+      <div className="absolute top-2 left-2 bg-zinc-800/80 text-zinc-300 text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded">
+        Simulação
+      </div>
       <Canvas
         orthographic
         camera={{ position: [0, 0, 5], zoom: 220, near: 0.1, far: 100 }}
@@ -128,7 +171,7 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   uniform sampler2D uMap;
   uniform float uFloat;       // 0..1
-  uniform float uPattern;     // 0..1
+  uniform float uPattern;     // 0..1 (paintseed / 1000)
   varying vec2 vUv;
 
   // ------------- noise utils -------------
@@ -158,21 +201,30 @@ const fragmentShader = /* glsl */ `
     return v;
   }
 
+  // Pattern aleatório porém estável: hash do seed gera offsets e ângulos
+  // únicos por seed, simulando como o jogo posiciona a textura.
+  vec3 patternParams(float seed) {
+    float a = fract(sin(seed * 12.9898) * 43758.5453);
+    float b = fract(sin(seed * 78.233 + 1.0) * 43758.5453);
+    float c = fract(sin(seed * 39.346 + 2.0) * 43758.5453);
+    return vec3(a, b, c);
+  }
+
   void main() {
-    // -------- Pattern: muda offset/rotação/escala da textura --------
-    // pattern=0.5 → identidade. Extremos = mais transformação.
-    float p = uPattern;
-    float angle = (p - 0.5) * 0.8;             // ~ -22°..22°
+    // ============ PATTERN: deslocamento + rotação + escala ============
+    // Cada seed gera uma combinação única e estável de transformações.
+    vec3 pp = patternParams(uPattern * 1000.0);
+    float angle = (pp.x - 0.5) * 1.6;          // ~ -45°..45°
     float c = cos(angle);
     float s = sin(angle);
     mat2 rot = mat2(c, -s, s, c);
 
     vec2 centered = vUv - 0.5;
-    float scale = 1.0 + (p - 0.5) * 0.35;
+    float scale = 0.85 + pp.y * 0.45;          // 0.85..1.30
     vec2 transformed = rot * centered * scale + 0.5;
-    transformed += vec2(p * 0.18 - 0.09, sin(p * 6.2831) * 0.05);
+    transformed += vec2(pp.x - 0.5, pp.z - 0.5) * 0.30;
 
-    // bordas: se sair da imagem, retorna ao alpha 0 ao invés de tilear
+    // Fora dos limites da imagem → descarta (não tilear)
     if (transformed.x < 0.0 || transformed.x > 1.0 ||
         transformed.y < 0.0 || transformed.y > 1.0) {
       discard;
@@ -181,21 +233,36 @@ const fragmentShader = /* glsl */ `
     vec4 base = texture2D(uMap, transformed);
     if (base.a < 0.01) discard;
 
-    // -------- Wear: arranhões + escurecimento por float --------
-    float n = fbm(vUv * 14.0 + p * 53.0);
-    float scratchMask = smoothstep(0.55 - uFloat * 0.5, 0.65, n);
+    // ============ FLOAT (WEAR): arranhões + dessaturação ============
+    // 0.00 → impecável | 1.00 → completamente destruído.
+    // Mistura três camadas de ruído em escalas diferentes para parecer
+    // arranhões reais.
+    float n1 = fbm(vUv * 8.0  + pp.x * 100.0);
+    float n2 = fbm(vUv * 24.0 + pp.y * 100.0);
+    float n3 = fbm(vUv * 60.0 + pp.z * 100.0);
+    float scratch = (n1 * 0.5 + n2 * 0.35 + n3 * 0.15);
+    float scratchMask = smoothstep(0.55 - uFloat * 0.7, 0.65, scratch);
 
-    // borda mais marcada (bordas das skins desgastam primeiro)
+    // Edge wear — bordas desgastam primeiro (igual ao CS2)
     float edge = pow(1.0 - abs(vUv.y - 0.5) * 2.0, 0.35) *
                  pow(1.0 - abs(vUv.x - 0.5) * 2.0, 0.55);
-    float edgeWear = (1.0 - edge) * uFloat;
+    float edgeWear = (1.0 - edge) * uFloat * 1.2;
 
-    float wearMask = clamp(scratchMask * uFloat + edgeWear * 0.6, 0.0, 1.0);
+    float wearMask = clamp(scratchMask * uFloat * 1.4 + edgeWear * 0.8, 0.0, 1.0);
 
-    vec3 worn = mix(base.rgb, base.rgb * 0.3, wearMask);
-    // leve dessaturação conforme desgaste
+    // Aplica desgaste:
+    //  - escurece (mistura com cor da arma metálica)
+    //  - dessatura (perde brilho)
+    //  - reduz brilho geral
+    vec3 metal = vec3(0.18, 0.16, 0.14);
+    vec3 worn = mix(base.rgb, metal, wearMask * 0.85);
     float gray = dot(worn, vec3(0.299, 0.587, 0.114));
-    worn = mix(worn, vec3(gray), wearMask * 0.35);
+    worn = mix(worn, vec3(gray), wearMask * 0.55);
+    worn *= (1.0 - uFloat * 0.25);
+
+    // Brilho geral diminui conforme float aumenta (skin nova brilha mais)
+    float shine = (1.0 - uFloat) * 0.15;
+    worn += vec3(shine);
 
     gl_FragColor = vec4(worn, base.a);
   }
@@ -224,6 +291,16 @@ function SkinPlane({
     [texture]
   );
 
+  // Atualiza uniforms imediatamente quando float/pattern mudam (durante drag).
+  useEffect(() => {
+    if (matRef.current) {
+      matRef.current.uniforms.uFloat.value = float;
+      matRef.current.uniforms.uPattern.value = pattern / 1000;
+    }
+  }, [float, pattern]);
+
+  // Garante render contínuo enquanto o usuário arrasta (r3f por padrão só
+  // re-renderiza quando algo muda — isto força frames consistentes).
   useFrame(() => {
     if (matRef.current) {
       matRef.current.uniforms.uFloat.value = float;

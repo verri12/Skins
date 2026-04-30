@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchSkinById } from "../api/skins";
 import { fetchPrice, type PriceData } from "../api/prices";
+import { inspectItem, type InspectResult } from "../api/inspect";
 import { wearFromFloat, WEAR_RANGES } from "../types";
 import type { Skin } from "../types";
 import SkinInspector2D from "../components/SkinInspector2D";
@@ -15,6 +16,12 @@ export default function SkinDetailPage() {
   const [floatVal, setFloatVal] = useState(0.15);
   const [pattern, setPattern] = useState(420);
   const [stattrak, setStattrak] = useState(false);
+
+  // Inspect link (item real via CSFloat)
+  const [inspectLink, setInspectLink] = useState("");
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+  const [inspectData, setInspectData] = useState<InspectResult | null>(null);
 
   const [prices, setPrices] = useState<PriceData[]>([]);
   const [pricesLoading, setPricesLoading] = useState(false);
@@ -95,9 +102,16 @@ export default function SkinDetailPage() {
             imageUrl={skin.image}
             float={floatVal}
             pattern={pattern}
+            realImageUrl={
+              inspectData?.imageurl
+                ? `/api/image?u=${encodeURIComponent(inspectData.imageurl)}`
+                : null
+            }
           />
           <p className="text-xs text-zinc-500">
-            Ajuste o float e o pattern abaixo para ver a skin mudar.
+            {inspectData
+              ? "Imagem renderizada pela Steam com float/pattern reais do item."
+              : "Ajuste o float e o pattern abaixo (modo simulação) ou cole um inspect link à direita para ver a skin real."}
           </p>
         </div>
 
@@ -122,6 +136,104 @@ export default function SkinDetailPage() {
               {skin.description}
             </p>
           )}
+
+          {/* Inspect Real (CSFloat) */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-sm">Inspecionar item real</h3>
+              {inspectData && (
+                <button
+                  onClick={() => {
+                    setInspectData(null);
+                    setInspectLink("");
+                    setInspectError(null);
+                  }}
+                  className="text-[11px] text-zinc-400 hover:text-amber-400"
+                >
+                  limpar
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Cole o inspect link do item (Steam: botão direito → "Inspect in
+              Game..." → "Copy Inspect Link") para carregar float e pattern
+              reais via CSFloat.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={inspectLink}
+                onChange={(e) => setInspectLink(e.target.value)}
+                placeholder="steam://rungame/730/.../+csgo_econ_action_preview S...A...D..."
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-amber-500"
+              />
+              <button
+                onClick={async () => {
+                  setInspectError(null);
+                  setInspectLoading(true);
+                  try {
+                    const data = await inspectItem(inspectLink);
+                    setInspectData(data);
+                    setFloatVal(data.float);
+                    setPattern(data.paintseed);
+                    if (data.stattrak !== stattrak && skin.stattrak) {
+                      setStattrak(data.stattrak);
+                    }
+                  } catch (e) {
+                    setInspectError((e as Error).message);
+                  } finally {
+                    setInspectLoading(false);
+                  }
+                }}
+                disabled={inspectLoading || !inspectLink.trim()}
+                className="text-xs px-3 py-1.5 bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-zinc-900 rounded font-medium transition"
+              >
+                {inspectLoading ? "..." : "Inspecionar"}
+              </button>
+            </div>
+            {inspectError && (
+              <p className="text-[11px] text-red-400">{inspectError}</p>
+            )}
+            {inspectData && (
+              <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+                <Stat label="Float" value={inspectData.float.toFixed(8)} />
+                <Stat label="Pattern" value={`#${inspectData.paintseed}`} />
+                <Stat
+                  label="Wear"
+                  value={inspectData.wear_name ?? wearFromFloat(inspectData.float)}
+                />
+                <Stat
+                  label="StatTrak™"
+                  value={inspectData.stattrak ? "sim" : "não"}
+                />
+                {inspectData.killeaterscore !== undefined &&
+                  inspectData.stattrak && (
+                    <Stat
+                      label="Kills"
+                      value={inspectData.killeaterscore.toString()}
+                    />
+                  )}
+                {inspectData.customname && (
+                  <Stat label="Nametag" value={inspectData.customname} />
+                )}
+                {inspectData.stickers && inspectData.stickers.length > 0 && (
+                  <div className="col-span-2">
+                    <span className="text-zinc-500">Adesivos:</span>{" "}
+                    <span className="text-zinc-300">
+                      {inspectData.stickers
+                        .map(
+                          (s) =>
+                            `${s.name ?? `#${s.stickerId}`}${
+                              s.wear ? ` (${(s.wear * 100).toFixed(0)}%)` : ""
+                            }`
+                        )
+                        .join(", ")}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Float */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
@@ -290,6 +402,15 @@ function WearBar({
         className="absolute top-0 h-full w-0.5 bg-white"
         style={{ left: `${((value - minF) / (maxF - minF)) * 100}%` }}
       />
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span className="text-zinc-500">{label}:</span>{" "}
+      <span className="text-zinc-200 font-mono">{value}</span>
     </div>
   );
 }

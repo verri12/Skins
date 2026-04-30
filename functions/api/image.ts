@@ -18,6 +18,11 @@ const ALLOWED_HOSTS = [
   "community.akamai.steamstatic.com",
   "steamcommunity-a.akamaihd.net",
   "steamcdn-a.akamaihd.net",
+  // CSFloat screenshot service (imagens renderizadas server-side com
+  // float/pattern reais do item, retornadas pela API de inspect).
+  "s.csfloat.com",
+  "cdn.csfloat.com",
+  "render.csgofloat.com",
 ];
 
 export const onRequestGet: PagesFunction = async (ctx) => {
@@ -44,11 +49,16 @@ export const onRequestGet: PagesFunction = async (ctx) => {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  // Tenta os mirrors em ordem caso o host informado falhe.
-  const fallbackOrder = [
-    upstream.hostname,
-    ...ALLOWED_HOSTS.filter((h) => h !== upstream.hostname),
-  ];
+  // Mirrors da Steam compartilham a mesma estrutura de URL, então faz
+  // sentido tentá-los como fallback um do outro. Hosts não-Steam (CSFloat
+  // etc) são consultados apenas no host original.
+  const STEAM_MIRRORS = ALLOWED_HOSTS.filter((h) =>
+    h.includes("steam") || h.includes("akamaihd")
+  );
+  const isSteam = STEAM_MIRRORS.includes(upstream.hostname);
+  const fallbackOrder = isSteam
+    ? [upstream.hostname, ...STEAM_MIRRORS.filter((h) => h !== upstream.hostname)]
+    : [upstream.hostname];
 
   for (const host of fallbackOrder) {
     const candidate = new URL(upstream.toString());

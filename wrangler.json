@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "cs-skins-viewer",
+  "compatibility_date": "2025-04-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "dist"
+}

@@ -2,7 +2,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { withSize, STEAM_MIRROR_COUNT } from "../utils/image";
+import { withSize, STEAM_MIRROR_COUNT, proxiedImage } from "../utils/image";
 
 interface Props {
   imageUrl: string;
@@ -84,13 +84,17 @@ function useSteamTexture(imageUrl: string): THREE.Texture | null {
 
     const tryMirror = (i: number) => {
       if (cancelled) return;
-      if (i >= STEAM_MIRROR_COUNT) {
+      if (i >= STEAM_MIRROR_COUNT + 1) {
         // todos os mirrors falharam → fallback procedural
         setTexture(makeFallbackTexture());
         return;
       }
+      // Primeira tentativa: proxy /api/image (sem CORS, com fallback de mirrors no edge).
+      // Demais tentativas: mirrors diretos (modo dev / fallback).
+      const src =
+        i === 0 ? proxiedImage(imageUrl, 512) : withSize(imageUrl, 512, i - 1);
       loader.load(
-        withSize(imageUrl, 512, i),
+        src,
         (t) => {
           if (cancelled) return;
           t.colorSpace = THREE.SRGBColorSpace;
